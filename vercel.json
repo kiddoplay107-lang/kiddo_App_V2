@@ -1,0 +1,28 @@
+{
+  "version": 2,
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "functions": {
+    "api/**/*.ts": {
+      "runtime": "@vercel/node@5.6.18"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/drive/contents/:folderId?",
+      "destination": "/api/drive/contents"
+    },
+    {
+      "source": "/api/drive/videos/:folderId",
+      "destination": "/api/drive/videos/[folderId]"
+    },
+    {
+      "source": "/api/drive/stream/:fileId",
+      "destination": "/api/drive/stream/[fileId]"
+    },
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
+  ]
+}

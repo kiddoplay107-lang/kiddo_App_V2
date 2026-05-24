@@ -1,0 +1,21 @@
+{
+  "name": "KiddoPlay",
+  "short_name": "KiddoPlay",
+  "description": "Cartoon playlists for kids",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F5F5F0",
+  "theme_color": "#FF6B6B",
+  "icons": [
+    {
+      "src": "https://picsum.photos/seed/kiddoplay/192/192",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://picsum.photos/seed/kiddoplay/512/512",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
