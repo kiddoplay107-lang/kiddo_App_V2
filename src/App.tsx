@@ -5,11 +5,11 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { Capacitor } from '@capacitor/core';
 
-// Free-Tier Dynamic Backend URLs (Render & Koyeb)
-const BACKENDS = {
-  koyeb: 'https://kiddo-app.koyeb.app',       // Replace with your real Koyeb URL
-  render: 'https://kiddo-app.onrender.com'    // Replace with your real Render URL
-};
+// Free-Tier Hybrid Backend Strategy (Vercel & Render)
+// Vercel handles super-fast, instantaneous directory navigation (0 cold start)
+// Render handles heavy video streaming requests with range and chunk support (unlocked runtime limits)
+const VERCEL_URL = 'https://kiddo-app-two.vercel.app'; // Replace with your Vercel URL
+const RENDER_URL = 'https://kiddo-app.onrender.com';    // Replace with your Render URL
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -25,17 +25,10 @@ interface DriveFile {
 type View = 'menu' | 'folders' | 'videos' | 'player' | 'games';
 
 export default function App() {
-  const [activeBackend, setActiveBackend] = useState<string>(() => {
-    if (Capacitor.getPlatform() === 'web') return '';
-    return localStorage.getItem('chosen_backend_url') || BACKENDS.koyeb;
-  });
+  const [backendStatus, setBackendStatus] = useState<'loading' | 'online' | 'asleep' | 'waking'>('loading');
+  const [vercelStatus, setVercelStatus] = useState<'loading' | 'online' | 'failed'>('loading');
 
-  const [backendStatuses, setBackendStatuses] = useState<{ koyeb: string; render: string }>({
-    koyeb: 'loading',
-    render: 'loading'
-  });
-
-  const BASE_URL = Capacitor.getPlatform() === 'web' ? '' : activeBackend;
+  const RENDER_BASE = Capacitor.getPlatform() === 'web' ? '' : RENDER_URL;
 
   const [view, setView] = useState<View>('menu');
   const [folders, setFolders] = useState<DriveFile[]>([]);
@@ -58,9 +51,9 @@ export default function App() {
       videoRef.current.play().then(() => setIsPlaying(true)).catch(err => {
         console.warn("Autoplay was prevented by the browser:", err);
         setIsPlaying(false);
-      });
-    }
-  }, [selectedVideo, view]);
+        });
+      }
+    }, [selectedVideo, view]);
 
   useEffect(() => {
     if (Capacitor.getPlatform() === 'web') {
@@ -71,79 +64,61 @@ export default function App() {
             const data = await res.json();
             setFolders(data.folders || []);
             setVideos(data.videos || []);
+            setBackendStatus('online');
+            setVercelStatus('online');
           }
         } catch (e) {
           console.warn('Web Pre-fetch failed', e);
+          setBackendStatus('asleep');
+          setVercelStatus('failed');
         }
       };
       prefetch();
       return;
     }
 
-    const pingBackend = async (url: string, key: 'koyeb' | 'render') => {
-      setBackendStatuses(prev => ({ ...prev, [key]: 'pinging...' }));
+    const prefetchViaVercel = async () => {
+      setVercelStatus('loading');
       try {
-        const start = Date.now();
+        console.log('Prefetching directories via instant Vercel...');
+        const res = await fetch(`${VERCEL_URL.replace(/\/$/, '')}/api/drive/contents`);
+        if (res.ok) {
+          const data = await res.json();
+          setFolders(data.folders || []);
+          setVideos(data.videos || []);
+          setVercelStatus('online');
+        } else {
+          setVercelStatus('failed');
+        }
+      } catch (err) {
+        console.warn('Vercel prefetch failed', err);
+        setVercelStatus('failed');
+      }
+    };
+
+    const wakeUpRender = async () => {
+      setBackendStatus('waking');
+      try {
         const controller = new AbortController();
-        const tId = setTimeout(() => controller.abort(), 60000); // Allow 60s for cold starts
+        const tId = setTimeout(() => controller.abort(), 70000); // Allow 70s for Render cold starts
         
-        const res = await fetch(`${url.replace(/\/$/, '')}/api/health`, { signal: controller.signal });
+        const res = await fetch(`${RENDER_URL.replace(/\/$/, '')}/api/health`, { signal: controller.signal });
         clearTimeout(tId);
         
         if (res.ok) {
-          const latency = Date.now() - start;
-          setBackendStatuses(prev => ({ ...prev, [key]: `online (${latency}ms)` }));
-          return { url, latency };
+          setBackendStatus('online');
+          console.log(`Render backend is online!`);
+        } else {
+          setBackendStatus('asleep');
         }
       } catch (e) {
-        setBackendStatuses(prev => ({ ...prev, [key]: 'asleep' }));
-      }
-      return null;
-    };
-
-    const setupConnectedBackends = async () => {
-      const koyebPromise = pingBackend(BACKENDS.koyeb, 'koyeb');
-      const renderPromise = pingBackend(BACKENDS.render, 'render');
-
-      // Race to see who wakes up first to get directories ASAP!
-      const firstWarmResult = await Promise.race([
-        koyebPromise.then(r => r ? { r } : null),
-        renderPromise.then(r => r ? { r } : null)
-      ]);
-
-      let chosenUrl = '';
-      if (firstWarmResult && firstWarmResult.r) {
-        chosenUrl = firstWarmResult.r.url;
-        setActiveBackend(chosenUrl);
-        localStorage.setItem('chosen_backend_url', chosenUrl);
-        
-        try {
-          const res = await fetch(`${chosenUrl.replace(/\/$/, '')}/api/drive/contents`);
-          if (res.ok) {
-            const data = await res.json();
-            setFolders(data.folders || []);
-            setVideos(data.videos || []);
-          }
-        } catch (e) {
-          console.warn('Dynamic prefetch failed', e);
-        }
-      }
-
-      // Resolve both and set active to the fastest
-      const results = await Promise.all([koyebPromise, renderPromise]);
-      const successful = results.filter(r => r !== null) as { url: string; latency: number }[];
-      
-      if (successful.length > 0) {
-        successful.sort((a, b) => a.latency - b.latency);
-        const fastestUrl = successful[0].url;
-        if (fastestUrl !== chosenUrl) {
-          setActiveBackend(fastestUrl);
-          localStorage.setItem('chosen_backend_url', fastestUrl);
-        }
+        console.warn('Wake up check failed', e);
+        setBackendStatus('asleep');
       }
     };
 
-    setupConnectedBackends();
+    prefetchViaVercel();
+    wakeUpRender();
   }, []);
 
   const handleMouseMove = () => {
@@ -157,16 +132,42 @@ export default function App() {
   const fetchContents = async (folder?: DriveFile) => {
     setLoading(true);
     setError(null);
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
+    const isWeb = Capacitor.getPlatform() === 'web';
+    const folderId = folder?.id || '';
+
+    // Primary: Vercel (instant), Fallback: Render (handles streams and full runtime)
+    const primaryUrl = isWeb 
+      ? `/api/drive/contents${folderId ? `/${folderId}` : ''}` 
+      : `${VERCEL_URL.replace(/\/$/, '')}/api/drive/contents${folderId ? `/${folderId}` : ''}`;
+    
+    const fallbackUrl = isWeb 
+      ? `/api/drive/contents${folderId ? `/${folderId}` : ''}` 
+      : `${RENDER_URL.replace(/\/$/, '')}/api/drive/contents${folderId ? `/${folderId}` : ''}`;
+
+    const makeRequest = async (targetUrl: string, timeoutMs: number) => {
+      const controller = new AbortController();
+      const tId = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetch(targetUrl, { signal: controller.signal });
+        clearTimeout(tId);
+        return res;
+      } catch (err) {
+        clearTimeout(tId);
+        throw err;
+      }
+    };
 
     try {
-      const folderId = folder?.id || '';
-      const url = `${BASE_URL.replace(/\/$/, '')}/api/drive/contents${folderId ? `/${folderId}` : ''}`;
-      console.log(`Fetching contents from: ${url}`);
-      
-      const res = await fetch(url, { signal: controller.signal });
-      clearTimeout(timeoutId);
+      let res;
+      console.log(`Fetching contents from primary URL: ${primaryUrl}`);
+      try {
+        // Fast 15s timeout for Vercel since it should be hot and instant
+        res = await makeRequest(primaryUrl, 15000);
+      } catch (primaryErr: any) {
+        console.warn(`Primary Vercel fetch failed: ${primaryErr.message}. Trying Render fallback...`);
+        // Fallback to Render with extra time (65s) in case it is booting cold
+        res = await makeRequest(fallbackUrl, isWeb ? 15000 : 65000);
+      }
 
       if (!res.ok) {
         const text = await res.text().catch(() => 'No response body');
@@ -194,9 +195,8 @@ export default function App() {
       
       setView('folders');
     } catch (err: any) {
-      clearTimeout(timeoutId);
       const msg = err.name === 'AbortError' ? 'Connection timed out (Check your internet or URL)' : err.message;
-      setError(`${msg}\nURL: ${BASE_URL}`);
+      setError(`${msg}\nPrimary Vercel: ${primaryUrl}\nFallback Render: ${fallbackUrl}`);
       console.error('Failed to fetch contents', err);
     } finally {
       setLoading(false);
@@ -335,10 +335,21 @@ export default function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="absolute inset-0 z-50 bg-[#FFFAF0]/80 backdrop-blur-sm flex flex-col items-center justify-center gap-4"
+              className="absolute inset-0 z-50 bg-[#FFFAF0]/85 backdrop-blur-sm flex flex-col items-center justify-center gap-4 text-center px-6"
             >
               <Loader2 className="w-16 h-16 animate-spin text-[#4ECDC4]" />
-              <p className="text-xl font-black text-[#4ECDC4] animate-pulse">Connecting...</p>
+              <p className="text-xl font-black text-[#4ECDC4] animate-pulse">
+                {Capacitor.getPlatform() === 'web' 
+                  ? 'Connecting...' 
+                  : vercelStatus === 'online' 
+                    ? 'Loading Videos...' 
+                    : 'Opening Galleries...'}
+              </p>
+              {Capacitor.getPlatform() !== 'web' && vercelStatus !== 'online' && (
+                <div className="text-xs text-gray-500 max-w-xs space-y-2 animate-fade-in leading-relaxed">
+                  <p>Connecting to our fast directory server (Vercel) to load your folders instantly.</p>
+                </div>
+              )}
             </motion.div>
           )}
         </AnimatePresence>
@@ -504,7 +515,7 @@ export default function App() {
                 <video 
                   ref={videoRef}
                   key={selectedVideo.id}
-                  src={`${BASE_URL.replace(/\/$/, '')}/api/drive/stream/${selectedVideo.id}`}
+                  src={`${RENDER_BASE.replace(/\/$/, '')}/api/drive/stream/${selectedVideo.id}`}
                   autoPlay
                   onTimeUpdate={handleVideoTimeUpdate}
                   onLoadedMetadata={handleVideoLoadedMetadata}
@@ -633,14 +644,25 @@ export default function App() {
 
       </main>
 
-      {/* Version Info & Dual-Backend Latency Tracker */}
+      {/* Version Info & Dual-Server Tracker */}
       <div className="p-2 pb-4 text-[10px] text-gray-400 text-center font-mono space-y-1">
-        <div>v1.2 | Platform: {Capacitor.getPlatform()}</div>
+        <div>v1.4 | Platform: {Capacitor.getPlatform()}</div>
         {Capacitor.getPlatform() !== 'web' && (
-          <div className="flex flex-wrap justify-center gap-x-4 gap-y-1 text-gray-400">
-            <span>Koyeb: <span className={backendStatuses.koyeb.includes('online') ? 'text-[#4ECDC4] font-bold' : 'text-[#FF6B6B]'}>{backendStatuses.koyeb}</span></span>
-            <span>Render: <span className={backendStatuses.render.includes('online') ? 'text-[#4ECDC4] font-bold' : 'text-[#FF6B6B]'}>{backendStatuses.render}</span></span>
-            <span className="text-white bg-black/20 px-2 rounded font-bold">Active: {activeBackend === BACKENDS.koyeb ? 'Koyeb' : 'Render'}</span>
+          <div className="flex flex-col items-center gap-1 text-[9px] text-gray-500">
+            <div className="flex justify-center gap-x-3">
+              <span>Directories (Vercel): <span className={vercelStatus === 'online' ? 'text-[#4ECDC4] font-bold' : vercelStatus === 'loading' ? 'text-yellow-400 font-bold' : 'text-[#FF6B6B] font-bold'}>{vercelStatus.toUpperCase()}</span></span>
+              <span>•</span>
+              <span>Streaming (Render): <span className={
+                backendStatus === 'online' 
+                  ? 'text-[#4ECDC4] font-bold' 
+                  : backendStatus === 'waking' 
+                    ? 'text-yellow-400 animate-pulse font-bold' 
+                    : 'text-[#FF6B6B] font-bold'
+              }>{backendStatus.toUpperCase()}</span></span>
+            </div>
+            {backendStatus === 'waking' && (
+              <p className="text-[#FF6B6B] animate-pulse">Render Server is waking up in background... (40-50s) Folders are fully active!</p>
+            )}
           </div>
         )}
       </div>

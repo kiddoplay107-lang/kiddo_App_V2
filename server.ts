@@ -22,7 +22,29 @@ async function startServer() {
 
   // Google Drive Auth
   const getDriveClient = () => {
-    const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON || '{}');
+    const rawJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+    if (!rawJson) {
+      throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON environment variable is missing.');
+    }
+
+    let credentials;
+    try {
+      const trimmed = rawJson.trim();
+      credentials = JSON.parse(trimmed);
+    } catch (e: any) {
+      if (rawJson.includes('@') && !rawJson.startsWith('{')) {
+        throw new Error(
+          `GOOGLE_SERVICE_ACCOUNT_JSON contains an email ("${rawJson.substring(0, 30)}...") instead of the complete JSON Key. ` +
+          `Please download your service account JSON Key file from Google Cloud Console (IAM -> Service Accounts -> Keys -> Add Key -> Create new key -> JSON) ` +
+          `and paste the entire file content into GOOGLE_SERVICE_ACCOUNT_JSON.`
+        );
+      }
+      throw new Error(
+        `Failed to parse GOOGLE_SERVICE_ACCOUNT_JSON: ${e.message}. ` +
+        `Make sure the environment variable contains the exact, entire JSON content of your Google Service Account Key, beginning with '{' and ending with '}'.`
+      );
+    }
+
     const auth = new google.auth.GoogleAuth({
       credentials,
       scopes: ['https://www.googleapis.com/auth/drive.readonly'],
